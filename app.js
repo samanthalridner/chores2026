@@ -9,6 +9,30 @@ const DAYS = [
   { key: "sat", label: "Sat" },
 ];
 
+const EVERY_DAY = DAYS.map((day) => day.key);
+const defaultChoreTemplates = {
+  Harrison: [
+    ["Make the bed", 1],
+    ["Brush your teeth", 1],
+    ["Clean your room", 1],
+    ["Tidy the dining room", 2],
+    ["Read 15 min", 1],
+    ["Fold laundry", 2],
+    ["Scoop the catbox", 2],
+    ["Weed the beds", 2],
+  ],
+  Bennett: [
+    ["Make the bed", 1],
+    ["Brush your teeth", 1],
+    ["Clean your room", 1],
+    ["Tidy the living room", 2],
+    ["Read 15 min", 1],
+    ["Fold laundry", 2],
+    ["Sweep the patio", 2],
+    ["Weed the beds", 2],
+  ],
+};
+
 const palette = ["#087e8b", "#d95d39", "#6c4f8f", "#2d7dd2", "#47a878", "#a14a76"];
 const iconPaths = {
   check: [["path", { d: "M20 6 9 17l-5-5" }]],
@@ -88,8 +112,6 @@ const defaultState = {
   selectedDate: localDateKey(new Date()),
   editMode: false,
   members: [
-    { id: cryptoId(), name: "Mom", color: "#087e8b" },
-    { id: cryptoId(), name: "Dad", color: "#d95d39" },
     { id: cryptoId(), name: "Harrison", color: "#6c4f8f" },
     { id: cryptoId(), name: "Bennett", color: "#2d7dd2" },
   ],
@@ -98,15 +120,12 @@ const defaultState = {
 };
 
 defaultState.chores = [
-  makeChore("Make bed", defaultState.members[0].id, "daily", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], 1),
-  makeChore("Unload dishwasher", defaultState.members[1].id, "daily", ["mon", "wed", "fri"], 2),
-  makeChore("Feed pets", defaultState.members[2].id, "daily", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], 1),
-  makeChore("Take out trash", defaultState.members[1].id, "weekly", ["sun", "wed"], 3),
-  makeChore("Laundry basket", defaultState.members[0].id, "weekly", ["sat"], 3),
-  makeChore("Wipe bathroom sink", defaultState.members[2].id, "weekly", ["sat"], 2),
+  ...defaultChoresForMember(defaultState.members[0]),
+  ...defaultChoresForMember(defaultState.members[1]),
 ];
 
 let state = loadState();
+saveState();
 let clockTimer = null;
 
 const app = document.querySelector("#app");
@@ -198,7 +217,7 @@ importFile.addEventListener("change", async (event) => {
   try {
     const imported = JSON.parse(await file.text());
     validateImportedState(imported);
-    state = imported;
+    state = migrateState(imported);
     state.selectedDate = localDateKey(new Date());
     saveAndRender();
   } catch (error) {
@@ -317,9 +336,8 @@ function renderTodayView() {
 
 function renderPersonColumn(member) {
   const chores = choresForDate(state.selectedDate).filter((chore) => chore.memberId === member.id);
-  const points = chores
-    .filter((chore) => isDone(chore.id, state.selectedDate))
-    .reduce((total, chore) => total + Number(chore.points || 0), 0);
+  const dailyPoints = pointsForMemberOnDate(member.id, state.selectedDate);
+  const totalPoints = overallPointsForMember(member.id);
 
   return `
     <section class="person-card">
@@ -328,9 +346,15 @@ function renderPersonColumn(member) {
         <div>
           <h3>${escapeHtml(member.name)}</h3>
         </div>
-        <div class="points-pill">
-          <i data-lucide="star"></i>
-          <span>${points}</span>
+        <div class="points-stack" aria-label="${escapeAttr(member.name)} points">
+          <div class="point-stat">
+            <span>Today</span>
+            <strong>${dailyPoints}</strong>
+          </div>
+          <div class="point-stat">
+            <span>Total</span>
+            <strong>${totalPoints}</strong>
+          </div>
         </div>
       </div>
 
@@ -454,18 +478,24 @@ function renderMemberScore(member) {
   const chores = choresForDate(state.selectedDate).filter((chore) => chore.memberId === member.id);
   const done = chores.filter((chore) => isDone(chore.id, state.selectedDate)).length;
   const progress = chores.length ? Math.round((done / chores.length) * 360) : 360;
-  const points = chores
-    .filter((chore) => isDone(chore.id, state.selectedDate))
-    .reduce((total, chore) => total + Number(chore.points || 0), 0);
+  const dailyPoints = pointsForMemberOnDate(member.id, state.selectedDate);
+  const totalPoints = overallPointsForMember(member.id);
 
   return `
     <article class="member-card">
       <div class="avatar" style="background:${member.color}">${initials(member.name)}</div>
       <div>
         <h3>${escapeHtml(member.name)}</h3>
-        <p>${points} points today</p>
+        <p>${dailyPoints} today | ${totalPoints} total</p>
       </div>
-      <button class="progress-ring" style="--progress:${progress}deg" data-label="${done}/${chores.length}" ${state.editMode ? `data-action="edit-member" data-member-id="${member.id}" aria-label="Edit ${escapeHtml(member.name)}"` : `aria-label="${escapeHtml(member.name)} progress"`}></button>
+      ${
+        state.editMode
+          ? `<div class="member-actions">
+              <button class="icon-button" type="button" data-action="edit-member" data-member-id="${member.id}" aria-label="Edit ${escapeHtml(member.name)}"><i data-lucide="pencil"></i></button>
+              <button class="icon-button" type="button" data-action="delete-member" data-member-id="${member.id}" aria-label="Remove ${escapeHtml(member.name)}"><i data-lucide="trash-2"></i></button>
+            </div>`
+          : `<button class="progress-ring" style="--progress:${progress}deg" data-label="${done}/${chores.length}" aria-label="${escapeHtml(member.name)} progress"></button>`
+      }
     </article>
   `;
 }
@@ -648,7 +678,12 @@ function toggleChore(choreId, dateKey) {
   if (state.completions[dateKey][choreId]) {
     delete state.completions[dateKey][choreId];
   } else {
-    state.completions[dateKey][choreId] = { doneAt: new Date().toISOString() };
+    const chore = state.chores.find((item) => item.id === choreId);
+    state.completions[dateKey][choreId] = {
+      doneAt: new Date().toISOString(),
+      memberId: chore?.memberId,
+      points: Number(chore?.points || 0),
+    };
   }
   saveAndRender();
 }
@@ -667,10 +702,21 @@ function deleteMember(memberId) {
     return;
   }
 
-  const fallback = state.members.find((member) => member.id !== memberId);
+  const removedChoreIds = new Set(
+    state.chores
+      .filter((chore) => chore.memberId === memberId)
+      .map((chore) => chore.id),
+  );
   state.members = state.members.filter((member) => member.id !== memberId);
-  state.chores = state.chores.map((chore) => chore.memberId === memberId ? { ...chore, memberId: fallback.id } : chore);
+  state.chores = state.chores.filter((chore) => chore.memberId !== memberId);
+  removeCompletionEntries(removedChoreIds);
   saveAndRender();
+}
+
+function removeCompletionEntries(choreIds, completions = state.completions) {
+  Object.values(completions).forEach((dayCompletions) => {
+    choreIds.forEach((choreId) => delete dayCompletions[choreId]);
+  });
 }
 
 function resetDay(dateKey) {
@@ -696,6 +742,23 @@ function getMember(memberId) {
   return state.members.find((member) => member.id === memberId);
 }
 
+function pointsForMemberOnDate(memberId, dateKey) {
+  return state.chores
+    .filter((chore) => chore.memberId === memberId && choreDueOn(chore, dateFromKey(dateKey)) && isDone(chore.id, dateKey))
+    .reduce((total, chore) => total + Number(chore.points || 0), 0);
+}
+
+function overallPointsForMember(memberId) {
+  return Object.entries(state.completions).reduce((total, [, dayCompletions]) => {
+    return total + Object.entries(dayCompletions).reduce((dayTotal, [choreId, completion]) => {
+      const chore = state.chores.find((item) => item.id === choreId);
+      const completionMember = chore?.memberId || completion.memberId;
+      if (completionMember !== memberId) return dayTotal;
+      return dayTotal + Number(chore?.points ?? completion.points ?? 0);
+    }, 0);
+  }, 0);
+}
+
 function completionPhrase(memberId, week) {
   const due = week.flatMap((dateKey) => {
     return state.chores
@@ -712,9 +775,15 @@ function makeChore(title, memberId, schedule, days, points) {
     title,
     memberId,
     schedule,
-    days,
+    days: [...days],
     points,
   };
+}
+
+function defaultChoresForMember(member) {
+  return (defaultChoreTemplates[member.name] || []).map(([title, points]) => {
+    return makeChore(title, member.id, "daily", EVERY_DAY, points);
+  });
 }
 
 function loadState() {
@@ -733,19 +802,71 @@ function migrateState(value) {
     Jordan: "Dad",
     Riley: "Harrison",
   };
-  const migrated = {
-    ...value,
-    members: value.members.map((member) => ({
+  const starterChoresToRemove = new Set([
+    "Make bed",
+    "Unload dishwasher",
+    "Feed pets",
+    "Take out trash",
+    "Laundry basket",
+    "Wipe bathroom sink",
+  ]);
+  const members = value.members
+    .map((member) => ({
       ...member,
       name: renameMap[member.name] || member.name,
-    })),
+    }))
+    .filter((member) => !["Mom", "Dad"].includes(member.name));
+
+  const harrison = ensureMember(members, "Harrison", "#6c4f8f");
+  const bennett = ensureMember(members, "Bennett", "#2d7dd2");
+  const validMemberIds = new Set(members.map((member) => member.id));
+  const removedChoreIds = new Set();
+  const chores = value.chores
+    .map((chore) => ({
+      ...chore,
+      days: Array.isArray(chore.days) && chore.days.length ? [...chore.days] : [...EVERY_DAY],
+      points: Number(chore.points || 0),
+    }))
+    .filter((chore) => {
+      const shouldRemove = !validMemberIds.has(chore.memberId) || starterChoresToRemove.has(chore.title);
+      if (shouldRemove) removedChoreIds.add(chore.id);
+      return !shouldRemove;
+    });
+
+  applyDefaultChores(chores, harrison);
+  applyDefaultChores(chores, bennett);
+
+  const completions = JSON.parse(JSON.stringify(value.completions || {}));
+  removeCompletionEntries(removedChoreIds, completions);
+
+  return {
+    ...value,
+    members,
+    chores,
+    completions,
   };
+}
 
-  if (!migrated.members.some((member) => member.name === "Bennett")) {
-    migrated.members.push({ id: cryptoId(), name: "Bennett", color: "#2d7dd2" });
+function ensureMember(members, name, color) {
+  let member = members.find((item) => item.name === name);
+  if (!member) {
+    member = { id: cryptoId(), name, color };
+    members.push(member);
   }
+  return member;
+}
 
-  return migrated;
+function applyDefaultChores(chores, member) {
+  (defaultChoreTemplates[member.name] || []).forEach(([title, points]) => {
+    const existing = chores.find((chore) => chore.memberId === member.id && chore.title.toLowerCase() === title.toLowerCase());
+    if (existing) {
+      existing.schedule = "daily";
+      existing.days = [...EVERY_DAY];
+      existing.points = points;
+    } else {
+      chores.push(makeChore(title, member.id, "daily", EVERY_DAY, points));
+    }
+  });
 }
 
 function validateImportedState(value) {

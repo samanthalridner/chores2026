@@ -366,6 +366,40 @@ button {
   font-weight: 900;
 }
 
+.points-stack,
+.member-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.points-stack {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.point-stat {
+  display: grid;
+  place-items: center;
+  min-width: 76px;
+  min-height: 52px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #3f2c00;
+  background: rgba(242, 183, 5, 0.25);
+  font-weight: 900;
+}
+
+.point-stat span {
+  color: #6d5708;
+  font-size: 0.72rem;
+}
+
+.point-stat strong {
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
 .chore-list {
   display: flex;
   flex-direction: column;
