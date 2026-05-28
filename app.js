@@ -32,6 +32,13 @@ const defaultChoreTemplates = {
     ["Weed the beds", 2],
   ],
 };
+const defaultPrizeTemplates = [
+  ["Pool", 10],
+  ["Inside Scoop", 75],
+  ["Out to lunch", 100],
+  ["Card store ($10)", 150],
+  ["Iron Pigs", 200],
+];
 
 const palette = ["#087e8b", "#d95d39", "#6c4f8f", "#2d7dd2", "#47a878", "#a14a76"];
 const iconPaths = {
@@ -89,6 +96,16 @@ const iconPaths = {
     ["path", { d: "M18 6 6 18" }],
     ["path", { d: "m6 6 12 12" }],
   ],
+  gift: [
+    ["rect", { x: "3", y: "8", width: "18", height: "4", rx: "1" }],
+    ["path", { d: "M12 8v13" }],
+    ["path", { d: "M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7" }],
+    ["path", { d: "M7.5 8a2.5 2.5 0 0 1 0-5A4.8 4.8 0 0 1 12 8a4.8 4.8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5" }],
+  ],
+  lock: [
+    ["rect", { x: "3", y: "11", width: "18", height: "11", rx: "2", ry: "2" }],
+    ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
+  ],
 };
 const iconFallbacks = {
   check: "OK",
@@ -104,6 +121,8 @@ const iconFallbacks = {
   upload: "UP",
   "user-plus": "+",
   x: "X",
+  gift: "PRIZE",
+  lock: "LOCK",
 };
 
 const defaultState = {
@@ -116,6 +135,7 @@ const defaultState = {
     { id: cryptoId(), name: "Bennett", color: "#2d7dd2" },
   ],
   chores: [],
+  prizes: [],
   completions: {},
 };
 
@@ -123,6 +143,7 @@ defaultState.chores = [
   ...defaultChoresForMember(defaultState.members[0]),
   ...defaultChoresForMember(defaultState.members[1]),
 ];
+defaultState.prizes = defaultPrizes();
 
 let state = loadState();
 saveState();
@@ -171,6 +192,18 @@ document.addEventListener("click", (event) => {
 
   if (action === "add-member") {
     openMemberModal();
+  }
+
+  if (action === "add-prize") {
+    openPrizeModal();
+  }
+
+  if (action === "edit-prize") {
+    openPrizeModal(target.dataset.prizeId);
+  }
+
+  if (action === "delete-prize") {
+    deletePrize(target.dataset.prizeId);
   }
 
   if (action === "edit-member") {
@@ -244,8 +277,8 @@ function render() {
 
       <nav class="view-tabs" aria-label="Board view">
         ${tabButton("today", "Today")}
-        ${tabButton("week", "Week")}
         ${tabButton("rewards", "Points")}
+        ${tabButton("prizes", "Prizes")}
       </nav>
 
       <div class="top-actions">
@@ -308,8 +341,8 @@ function renderSidebar() {
 }
 
 function renderMain() {
-  if (state.view === "week") return renderWeekView();
   if (state.view === "rewards") return renderRewardsView();
+  if (state.view === "prizes") return renderPrizeView();
   return renderTodayView();
 }
 
@@ -471,6 +504,81 @@ function renderRewardsView() {
         }).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderPrizeView() {
+  const prizes = [...(state.prizes || [])].sort((a, b) => Number(a.points || 0) - Number(b.points || 0));
+
+  return `
+    <section class="main-board">
+      <div class="panel-title">
+        <div>
+          <h2>Prizes</h2>
+          <p>${state.members.map((member) => `${escapeHtml(member.name)}: ${overallPointsForMember(member.id)} pts`).join(" | ")}</p>
+        </div>
+        <button class="text-button primary" type="button" data-action="add-prize"><i data-lucide="gift"></i><span>Prize</span></button>
+      </div>
+
+      <div class="prize-grid">
+        ${
+          prizes.length
+            ? prizes.map(renderPrizeCard).join("")
+            : `<div class="empty-state prize-empty">No prizes yet</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderPrizeCard(prize) {
+  const cost = Number(prize.points || 0);
+  const unlockedCount = state.members.filter((member) => overallPointsForMember(member.id) >= cost).length;
+
+  return `
+    <article class="prize-card ${unlockedCount ? "" : "is-locked"}">
+      <div class="prize-card-header">
+        <div>
+          <div class="prize-icon"><i data-lucide="${unlockedCount ? "gift" : "lock"}"></i></div>
+          <h3>${escapeHtml(prize.title)}</h3>
+        </div>
+        <div class="prize-cost">
+          <strong>${cost}</strong>
+          <span>pts</span>
+        </div>
+      </div>
+
+      <div class="unlock-list">
+        ${state.members.map((member) => renderPrizeMemberStatus(member, prize)).join("")}
+      </div>
+
+      ${
+        state.editMode
+          ? `<div class="row-actions prize-actions">
+              <button class="icon-button" type="button" data-action="edit-prize" data-prize-id="${prize.id}" aria-label="Edit ${escapeHtml(prize.title)}"><i data-lucide="pencil"></i></button>
+              <button class="icon-button" type="button" data-action="delete-prize" data-prize-id="${prize.id}" aria-label="Delete ${escapeHtml(prize.title)}"><i data-lucide="trash-2"></i></button>
+            </div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderPrizeMemberStatus(member, prize) {
+  const total = overallPointsForMember(member.id);
+  const cost = Number(prize.points || 0);
+  const unlocked = total >= cost;
+  const remaining = Math.max(0, cost - total);
+
+  return `
+    <div class="unlock-row ${unlocked ? "is-unlocked" : "is-locked"}">
+      <div class="avatar small" style="background:${member.color}">${initials(member.name)}</div>
+      <div>
+        <strong>${escapeHtml(member.name)}</strong>
+        <span>${unlocked ? "Unlocked" : `${remaining} pts to go`}</span>
+      </div>
+      <i data-lucide="${unlocked ? "check" : "lock"}"></i>
+    </div>
   `;
 }
 
@@ -654,6 +762,62 @@ function openMemberModal(memberId) {
   }
 }
 
+function openPrizeModal(prizeId) {
+  const prize = state.prizes?.find((item) => item.id === prizeId);
+  modalTitle.textContent = prize ? "Edit Prize" : "Add Prize";
+  modalBody.innerHTML = `
+    <form class="form" id="prizeForm">
+      <label>
+        Prize
+        <input name="title" value="${escapeAttr(prize?.title || "")}" maxlength="60" required />
+      </label>
+
+      <label>
+        Points needed
+        <input name="points" type="number" min="1" max="9999" value="${Number(prize?.points || 10)}" required />
+      </label>
+
+      <div class="form-actions">
+        ${prize ? `<button class="text-button danger" type="button" data-delete-prize-modal>Delete</button>` : ""}
+        <button class="text-button" type="button" data-close-modal>Cancel</button>
+        <button class="text-button primary" type="submit">Save</button>
+      </div>
+    </form>
+  `;
+
+  modalBackdrop.hidden = false;
+  refreshIcons();
+  const form = document.querySelector("#prizeForm");
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const updated = {
+      id: prize?.id || cryptoId(),
+      title: cleanText(data.get("title")),
+      points: clamp(Number(data.get("points") || 1), 1, 9999),
+    };
+
+    state.prizes = Array.isArray(state.prizes) ? state.prizes : [];
+    if (prize) {
+      state.prizes = state.prizes.map((item) => (item.id === prize.id ? updated : item));
+    } else {
+      state.prizes.push(updated);
+    }
+
+    closeModal();
+    saveAndRender();
+  });
+
+  const deleteButton = form.querySelector("[data-delete-prize-modal]");
+  if (deleteButton) {
+    deleteButton.addEventListener("click", () => {
+      deletePrize(prize.id);
+      closeModal();
+    });
+  }
+}
+
 function openNotice(title, message) {
   modalTitle.textContent = title;
   modalBody.innerHTML = `
@@ -693,6 +857,11 @@ function deleteChore(choreId) {
   Object.keys(state.completions).forEach((dateKey) => {
     delete state.completions[dateKey][choreId];
   });
+  saveAndRender();
+}
+
+function deletePrize(prizeId) {
+  state.prizes = (state.prizes || []).filter((prize) => prize.id !== prizeId);
   saveAndRender();
 }
 
@@ -786,6 +955,18 @@ function defaultChoresForMember(member) {
   });
 }
 
+function makePrize(title, points) {
+  return {
+    id: cryptoId(),
+    title,
+    points,
+  };
+}
+
+function defaultPrizes() {
+  return defaultPrizeTemplates.map(([title, points]) => makePrize(title, points));
+}
+
 function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORE_KEY));
@@ -841,8 +1022,14 @@ function migrateState(value) {
 
   return {
     ...value,
+    view: value.view === "week" ? "prizes" : (["today", "rewards", "prizes"].includes(value.view) ? value.view : "today"),
     members,
     chores,
+    prizes: applyDefaultPrizes(Array.isArray(value.prizes) ? value.prizes.map((prize) => ({
+      id: prize.id || cryptoId(),
+      title: cleanText(prize.title),
+      points: clamp(Number(prize.points || 1), 1, 9999),
+    })).filter((prize) => prize.title) : []),
     completions,
   };
 }
@@ -867,6 +1054,20 @@ function applyDefaultChores(chores, member) {
       chores.push(makeChore(title, member.id, "daily", EVERY_DAY, points));
     }
   });
+}
+
+function applyDefaultPrizes(prizes) {
+  defaultPrizeTemplates.forEach(([title, points]) => {
+    const existing = prizes.find((prize) => prize.title.toLowerCase() === title.toLowerCase());
+    if (existing) {
+      existing.title = title;
+      existing.points = points;
+    } else {
+      prizes.push(makePrize(title, points));
+    }
+  });
+
+  return prizes;
 }
 
 function validateImportedState(value) {

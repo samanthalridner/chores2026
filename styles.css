@@ -401,8 +401,9 @@ button {
 }
 
 .chore-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
   gap: 10px;
   min-height: 120px;
   overflow: auto;
@@ -572,6 +573,128 @@ button {
   font-weight: 800;
 }
 
+.prize-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-content: start;
+  align-items: start;
+  gap: 16px;
+  overflow: auto;
+  padding: 2px 2px 14px;
+}
+
+.prize-empty {
+  grid-column: 1 / -1;
+}
+
+.prize-card {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 16px;
+  min-height: 250px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(23, 32, 38, 0.08);
+}
+
+.prize-card.is-locked {
+  color: #5f6970;
+  background: rgba(241, 244, 245, 0.9);
+}
+
+.prize-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.prize-card-header h3 {
+  margin: 10px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 1.45rem;
+}
+
+.prize-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--plum);
+}
+
+.prize-card.is-locked .prize-icon {
+  color: #687783;
+  background: #e1e7ea;
+}
+
+.prize-cost {
+  display: grid;
+  place-items: center;
+  min-width: 80px;
+  min-height: 66px;
+  border-radius: 8px;
+  color: #3f2c00;
+  background: rgba(242, 183, 5, 0.25);
+  font-weight: 900;
+}
+
+.prize-cost strong {
+  font-size: 1.9rem;
+  line-height: 1;
+}
+
+.prize-cost span {
+  font-size: 0.78rem;
+}
+
+.unlock-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.unlock-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(71, 168, 120, 0.11);
+}
+
+.unlock-row.is-locked {
+  color: #697882;
+  background: #eef3f4;
+}
+
+.unlock-row strong,
+.unlock-row span {
+  display: block;
+}
+
+.unlock-row span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.avatar.small {
+  width: 42px;
+  height: 42px;
+}
+
+.prize-actions {
+  justify-content: flex-end;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -707,6 +830,10 @@ select:focus-visible {
   }
 
   .content {
+    grid-template-columns: 1fr;
+  }
+
+  .chore-list {
     grid-template-columns: 1fr;
   }
 
