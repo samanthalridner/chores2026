@@ -1,4 +1,4 @@
-# Echo Show Chore Chart
+# Echo Show Chores
 
 This is a touch-friendly chore chart designed for the Echo Show 21 browser.
 
@@ -22,3 +22,7 @@ Then open `http://127.0.0.1:4173`.
 ## Better Sync Later
 
 For syncing between phones and the Echo Show, add a small backend such as Firebase, Supabase, Airtable, or Google Sheets. For voice commands, build an Alexa custom skill using Alexa Presentation Language and reuse the same chore data model.
+
+## Supabase Sync
+
+Run `supabase-setup.sql` in the Supabase SQL Editor before publishing the site. The app uses the configured publishable key and board ID in `app.js`, then syncs changes to the `public.chore_boards` row.

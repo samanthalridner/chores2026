@@ -1,4 +1,10 @@
 const STORE_KEY = "echoChoreChart.v1";
+const SUPABASE_CONFIG = {
+  url: "https://spkqbtaibmyrhcpazzqj.supabase.co",
+  publishableKey: "sb_publishable__kbmdAMM8b4HhbbXuKbpcw_5Q-qtVqM",
+  boardId: "f3891928-6e63-415f-a6a7-53ba65073274",
+  pollMs: 8000,
+};
 const DAYS = [
   { key: "sun", label: "Sun" },
   { key: "mon", label: "Mon" },
@@ -63,6 +69,7 @@ const iconPaths = {
     ["path", { d: "M5 12h14" }],
     ["path", { d: "M12 5v14" }],
   ],
+  minus: [["path", { d: "M5 12h14" }]],
   "rotate-ccw": [
     ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }],
     ["path", { d: "M3 3v5h5" }],
@@ -123,10 +130,11 @@ const iconFallbacks = {
   x: "X",
   gift: "PRIZE",
   lock: "LOCK",
+  minus: "-",
 };
 
 const defaultState = {
-  householdName: "Home Chore Board",
+  householdName: "Chores",
   view: "today",
   selectedDate: localDateKey(new Date()),
   editMode: false,
@@ -136,6 +144,8 @@ const defaultState = {
   ],
   chores: [],
   prizes: [],
+  redemptions: [],
+  adjustments: [],
   completions: {},
 };
 
@@ -148,6 +158,16 @@ defaultState.prizes = defaultPrizes();
 let state = loadState();
 saveState();
 let clockTimer = null;
+let syncTimer = null;
+let saveTimer = null;
+let remoteSaveInFlight = false;
+let remoteSaveQueued = false;
+let remoteUpdatedAt = null;
+let isApplyingRemote = false;
+let syncStatus = {
+  state: "local",
+  message: "Local",
+};
 
 const app = document.querySelector("#app");
 const modalBackdrop = document.querySelector("#modalBackdrop");
@@ -157,6 +177,7 @@ const importFile = document.querySelector("#importFile");
 
 render();
 startClock();
+startSupabaseSync();
 
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
@@ -204,6 +225,30 @@ document.addEventListener("click", (event) => {
 
   if (action === "delete-prize") {
     deletePrize(target.dataset.prizeId);
+  }
+
+  if (action === "redeem-prize") {
+    redeemPrize(target.dataset.memberId, target.dataset.prizeId);
+  }
+
+  if (action === "delete-redemption") {
+    deleteRedemption(target.dataset.redemptionId);
+  }
+
+  if (action === "adjust-points") {
+    addPointAdjustment(target.dataset.memberId, Number(target.dataset.amount));
+  }
+
+  if (action === "delete-adjustment") {
+    deletePointAdjustment(target.dataset.adjustmentId);
+  }
+
+  if (action === "reset-member-points") {
+    openResetMemberPointsModal(target.dataset.memberId);
+  }
+
+  if (action === "confirm-reset-member-points") {
+    resetMemberPoints(target.dataset.memberId);
   }
 
   if (action === "edit-member") {
@@ -282,6 +327,7 @@ function render() {
       </nav>
 
       <div class="top-actions">
+        <div class="sync-pill sync-${syncStatus.state}" title="${escapeAttr(syncStatus.message)}">${escapeHtml(syncStatus.message)}</div>
         <div class="clock" data-clock>${formatTime(new Date())}</div>
         <button class="icon-button ${state.editMode ? "is-active" : ""}" type="button" data-action="toggle-edit" aria-label="Edit board">
           <i data-lucide="settings-2"></i>
@@ -477,33 +523,120 @@ function renderDayColumn(date) {
 
 function renderRewardsView() {
   const week = getWeekDates(dateFromKey(state.selectedDate)).map(localDateKey);
+  const redemptions = [...(state.redemptions || [])].sort((a, b) => new Date(b.redeemedAt || 0) - new Date(a.redeemedAt || 0));
+  const adjustments = [...(state.adjustments || [])].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   return `
     <section class="main-board">
       <div class="panel-title">
         <div>
           <h2>Points</h2>
-          <p>${formatShortDate(dateFromKey(week[0]))} - ${formatShortDate(dateFromKey(week[6]))}</p>
+          <p>Earned, redeemed, and available balances</p>
         </div>
         <button class="text-button" type="button" data-action="export"><i data-lucide="download"></i><span>Backup</span></button>
       </div>
 
-      <div class="reward-grid">
-        ${state.members.map((member) => {
-          const points = week.reduce((total, dateKey) => {
-            return total + state.chores
-              .filter((chore) => chore.memberId === member.id && choreDueOn(chore, dateFromKey(dateKey)) && isDone(chore.id, dateKey))
-              .reduce((sum, chore) => sum + Number(chore.points || 0), 0);
-          }, 0);
-          return `
-            <article class="reward-card" style="background:${member.color}">
-              <h3>${escapeHtml(member.name)}</h3>
-              <strong>${points}</strong>
-              <p>${completionPhrase(member.id, week)}</p>
-            </article>
-          `;
-        }).join("")}
+      <div class="points-dashboard">
+        <div class="reward-grid">
+          ${state.members.map((member) => {
+            const weekChorePoints = week.reduce((total, dateKey) => {
+              return total + state.chores
+                .filter((chore) => chore.memberId === member.id && choreDueOn(chore, dateFromKey(dateKey)) && isDone(chore.id, dateKey))
+                .reduce((sum, chore) => sum + Number(chore.points || 0), 0);
+            }, 0);
+            const weekAdjustments = week.reduce((total, dateKey) => total + adjustedPointsForMemberOnDate(member.id, dateKey), 0);
+            const weekPoints = weekChorePoints + weekAdjustments;
+            const earned = earnedPointsForMember(member.id);
+            const redeemed = redeemedPointsForMember(member.id);
+            const adjusted = adjustedPointsForMember(member.id);
+            const available = overallPointsForMember(member.id);
+            return `
+              <article class="reward-card" style="background:${member.color}">
+                <h3>${escapeHtml(member.name)}</h3>
+                <strong>${available}</strong>
+                <p>${weekPoints} net this week | ${earned} lifetime earned | ${formatSignedPoints(adjusted)} bonus | ${redeemed} redeemed</p>
+                ${
+                  state.editMode
+                    ? `<div class="reward-actions">
+                        <button class="score-action is-positive" type="button" data-action="adjust-points" data-member-id="${member.id}" data-amount="1" aria-label="Add one point for ${escapeAttr(member.name)}"><i data-lucide="plus"></i><span>Add 1</span></button>
+                        <button class="score-action is-negative" type="button" data-action="adjust-points" data-member-id="${member.id}" data-amount="-1" aria-label="Deduct one point from ${escapeAttr(member.name)}"><i data-lucide="minus"></i><span>Deduct 1</span></button>
+                        <button class="score-action" type="button" data-action="reset-member-points" data-member-id="${member.id}" aria-label="Reset points for ${escapeAttr(member.name)}"><i data-lucide="rotate-ccw"></i><span>Reset</span></button>
+                      </div>`
+                    : ""
+                }
+              </article>
+            `;
+          }).join("")}
+        </div>
+
+        <section class="redemption-panel">
+          <div class="redemption-header">
+            <h3>Redeemed Prizes</h3>
+            <span>${redemptions.length} claimed</span>
+          </div>
+          <div class="redemption-list">
+            ${
+              redemptions.length
+                ? redemptions.map(renderRedemptionRow).join("")
+                : `<div class="empty-state">Nothing redeemed yet</div>`
+            }
+          </div>
+        </section>
+
+        <section class="redemption-panel">
+          <div class="redemption-header">
+            <h3>Bonus Point Changes</h3>
+            <span>${adjustments.length} changes</span>
+          </div>
+          <div class="redemption-list">
+            ${
+              adjustments.length
+                ? adjustments.map(renderAdjustmentRow).join("")
+                : `<div class="empty-state">No bonus changes yet</div>`
+            }
+          </div>
+        </section>
       </div>
     </section>
+  `;
+}
+
+function renderRedemptionRow(redemption) {
+  const member = getMember(redemption.memberId);
+  return `
+    <article class="redemption-row">
+      <div class="avatar small" style="background:${member?.color || "#60707b"}">${member ? initials(member.name) : "?"}</div>
+      <div>
+        <strong>${escapeHtml(redemption.prizeTitle || "Prize")}</strong>
+        <span>${escapeHtml(member?.name || "Unknown")} | ${formatRedemptionDate(redemption.redeemedAt)}</span>
+      </div>
+      <div class="redemption-points">-${Number(redemption.points || 0)}</div>
+      ${
+        state.editMode
+          ? `<button class="icon-button" type="button" data-action="delete-redemption" data-redemption-id="${redemption.id}" aria-label="Remove redemption"><i data-lucide="trash-2"></i></button>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderAdjustmentRow(adjustment) {
+  const member = getMember(adjustment.memberId);
+  const points = Number(adjustment.points || 0);
+  const title = adjustment.label || (points >= 0 ? "Bonus point" : "Point deduction");
+  return `
+    <article class="redemption-row point-change-row">
+      <div class="avatar small" style="background:${member?.color || "#60707b"}">${member ? initials(member.name) : "?"}</div>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(member?.name || "Unknown")} | ${formatRedemptionDate(adjustment.createdAt)}</span>
+      </div>
+      <div class="redemption-points adjustment-points ${points >= 0 ? "is-positive" : "is-negative"}">${formatSignedPoints(points)}</div>
+      ${
+        state.editMode
+          ? `<button class="icon-button" type="button" data-action="delete-adjustment" data-adjustment-id="${adjustment.id}" aria-label="Remove point change"><i data-lucide="trash-2"></i></button>`
+          : ""
+      }
+    </article>
   `;
 }
 
@@ -515,7 +648,7 @@ function renderPrizeView() {
       <div class="panel-title">
         <div>
           <h2>Prizes</h2>
-          <p>${state.members.map((member) => `${escapeHtml(member.name)}: ${overallPointsForMember(member.id)} pts`).join(" | ")}</p>
+          <p>Tap an unlocked checkmark to redeem points</p>
         </div>
         <button class="text-button primary" type="button" data-action="add-prize"><i data-lucide="gift"></i><span>Prize</span></button>
       </div>
@@ -569,15 +702,24 @@ function renderPrizeMemberStatus(member, prize) {
   const cost = Number(prize.points || 0);
   const unlocked = total >= cost;
   const remaining = Math.max(0, cost - total);
+  const percent = cost ? clamp(Math.round((total / cost) * 100), 0, 100) : 100;
 
   return `
     <div class="unlock-row ${unlocked ? "is-unlocked" : "is-locked"}">
       <div class="avatar small" style="background:${member.color}">${initials(member.name)}</div>
       <div>
-        <strong>${escapeHtml(member.name)}</strong>
-        <span>${unlocked ? "Unlocked" : `${remaining} pts to go`}</span>
+        <div class="unlock-copy">
+          <span>${unlocked ? "Unlocked" : `${remaining} pts to go`}</span>
+        </div>
+        <div class="prize-progress" role="progressbar" aria-label="${escapeAttr(`${member.name} progress for ${prize.title}`)}" aria-valuemin="0" aria-valuemax="${cost}" aria-valuenow="${Math.min(total, cost)}">
+          <span style="width:${percent}%"></span>
+        </div>
       </div>
-      <i data-lucide="${unlocked ? "check" : "lock"}"></i>
+      ${
+        unlocked
+          ? `<button class="redeem-button" type="button" data-action="redeem-prize" data-member-id="${member.id}" data-prize-id="${prize.id}" aria-label="Redeem ${escapeAttr(prize.title)} for ${escapeAttr(member.name)}"><i data-lucide="check"></i></button>`
+          : `<i data-lucide="lock"></i>`
+      }
     </div>
   `;
 }
@@ -818,6 +960,24 @@ function openPrizeModal(prizeId) {
   }
 }
 
+function openResetMemberPointsModal(memberId) {
+  const member = getMember(memberId);
+  if (!member) return;
+
+  modalTitle.textContent = `Reset ${member.name}'s Points?`;
+  modalBody.innerHTML = `
+    <div class="form">
+      <p>This clears ${escapeHtml(member.name)}'s completed chore history, redeemed prizes, and bonus point changes. Chores and prizes stay on the board.</p>
+      <div class="form-actions">
+        <button class="text-button" type="button" data-close-modal>Cancel</button>
+        <button class="text-button danger" type="button" data-action="confirm-reset-member-points" data-member-id="${member.id}">Reset Points</button>
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  refreshIcons();
+}
+
 function openNotice(title, message) {
   modalTitle.textContent = title;
   modalBody.innerHTML = `
@@ -862,6 +1022,58 @@ function deleteChore(choreId) {
 
 function deletePrize(prizeId) {
   state.prizes = (state.prizes || []).filter((prize) => prize.id !== prizeId);
+  state.redemptions = (state.redemptions || []).map((redemption) => (
+    redemption.prizeId === prizeId ? { ...redemption, prizeId: null } : redemption
+  ));
+  saveAndRender();
+}
+
+function redeemPrize(memberId, prizeId) {
+  const member = getMember(memberId);
+  const prize = (state.prizes || []).find((item) => item.id === prizeId);
+  if (!member || !prize) return;
+
+  const cost = Number(prize.points || 0);
+  if (overallPointsForMember(memberId) < cost) {
+    openNotice("Not Enough Points", `${member.name} needs ${cost - overallPointsForMember(memberId)} more points for ${prize.title}.`);
+    return;
+  }
+
+  state.redemptions = Array.isArray(state.redemptions) ? state.redemptions : [];
+  state.redemptions.push({
+    id: cryptoId(),
+    memberId,
+    prizeId,
+    prizeTitle: prize.title,
+    points: cost,
+    redeemedAt: new Date().toISOString(),
+  });
+  saveAndRender();
+}
+
+function deleteRedemption(redemptionId) {
+  state.redemptions = (state.redemptions || []).filter((redemption) => redemption.id !== redemptionId);
+  saveAndRender();
+}
+
+function addPointAdjustment(memberId, amount) {
+  const member = getMember(memberId);
+  if (!member || !amount) return;
+
+  const points = amount > 0 ? 1 : -1;
+  state.adjustments = Array.isArray(state.adjustments) ? state.adjustments : [];
+  state.adjustments.push({
+    id: cryptoId(),
+    memberId,
+    points,
+    label: points > 0 ? "Bonus point" : "Point deduction",
+    createdAt: new Date().toISOString(),
+  });
+  saveAndRender();
+}
+
+function deletePointAdjustment(adjustmentId) {
+  state.adjustments = (state.adjustments || []).filter((adjustment) => adjustment.id !== adjustmentId);
   saveAndRender();
 }
 
@@ -878,6 +1090,8 @@ function deleteMember(memberId) {
   );
   state.members = state.members.filter((member) => member.id !== memberId);
   state.chores = state.chores.filter((chore) => chore.memberId !== memberId);
+  state.redemptions = (state.redemptions || []).filter((redemption) => redemption.memberId !== memberId);
+  state.adjustments = (state.adjustments || []).filter((adjustment) => adjustment.memberId !== memberId);
   removeCompletionEntries(removedChoreIds);
   saveAndRender();
 }
@@ -886,6 +1100,26 @@ function removeCompletionEntries(choreIds, completions = state.completions) {
   Object.values(completions).forEach((dayCompletions) => {
     choreIds.forEach((choreId) => delete dayCompletions[choreId]);
   });
+}
+
+function removeCompletionEntriesForMember(memberId, completions = state.completions) {
+  Object.values(completions).forEach((dayCompletions) => {
+    Object.entries(dayCompletions).forEach(([choreId, completion]) => {
+      const chore = state.chores.find((item) => item.id === choreId);
+      const completionMember = chore?.memberId || completion?.memberId;
+      if (completionMember === memberId) delete dayCompletions[choreId];
+    });
+  });
+}
+
+function resetMemberPoints(memberId) {
+  if (!getMember(memberId)) return;
+
+  removeCompletionEntriesForMember(memberId);
+  state.redemptions = (state.redemptions || []).filter((redemption) => redemption.memberId !== memberId);
+  state.adjustments = (state.adjustments || []).filter((adjustment) => adjustment.memberId !== memberId);
+  closeModal();
+  saveAndRender();
 }
 
 function resetDay(dateKey) {
@@ -912,12 +1146,13 @@ function getMember(memberId) {
 }
 
 function pointsForMemberOnDate(memberId, dateKey) {
-  return state.chores
+  const chorePoints = state.chores
     .filter((chore) => chore.memberId === memberId && choreDueOn(chore, dateFromKey(dateKey)) && isDone(chore.id, dateKey))
     .reduce((total, chore) => total + Number(chore.points || 0), 0);
+  return chorePoints + adjustedPointsForMemberOnDate(memberId, dateKey);
 }
 
-function overallPointsForMember(memberId) {
+function earnedPointsForMember(memberId) {
   return Object.entries(state.completions).reduce((total, [, dayCompletions]) => {
     return total + Object.entries(dayCompletions).reduce((dayTotal, [choreId, completion]) => {
       const chore = state.chores.find((item) => item.id === choreId);
@@ -926,6 +1161,28 @@ function overallPointsForMember(memberId) {
       return dayTotal + Number(chore?.points ?? completion.points ?? 0);
     }, 0);
   }, 0);
+}
+
+function redeemedPointsForMember(memberId) {
+  return (state.redemptions || [])
+    .filter((redemption) => redemption.memberId === memberId)
+    .reduce((total, redemption) => total + Number(redemption.points || 0), 0);
+}
+
+function adjustedPointsForMember(memberId) {
+  return (state.adjustments || [])
+    .filter((adjustment) => adjustment.memberId === memberId)
+    .reduce((total, adjustment) => total + Number(adjustment.points || 0), 0);
+}
+
+function adjustedPointsForMemberOnDate(memberId, dateKey) {
+  return (state.adjustments || [])
+    .filter((adjustment) => adjustment.memberId === memberId && localDateKey(new Date(adjustment.createdAt)) === dateKey)
+    .reduce((total, adjustment) => total + Number(adjustment.points || 0), 0);
+}
+
+function overallPointsForMember(memberId) {
+  return Math.max(0, earnedPointsForMember(memberId) + adjustedPointsForMember(memberId) - redeemedPointsForMember(memberId));
 }
 
 function completionPhrase(memberId, week) {
@@ -977,6 +1234,44 @@ function loadState() {
   }
 }
 
+function serializeBoardState(value) {
+  return {
+    householdName: value.householdName,
+    members: value.members,
+    chores: value.chores,
+    prizes: value.prizes || [],
+    redemptions: value.redemptions || [],
+    adjustments: value.adjustments || [],
+    completions: value.completions || {},
+  };
+}
+
+function mergeBoardState(boardData) {
+  const localUi = {
+    view: state.view,
+    selectedDate: localDateKey(new Date()),
+    editMode: state.editMode,
+  };
+  const incoming = migrateState({
+    ...defaultState,
+    ...boardData,
+    ...localUi,
+  });
+  state = {
+    ...incoming,
+    ...localUi,
+  };
+}
+
+function isUsableRemoteBoard(value) {
+  return Boolean(
+    value
+    && Array.isArray(value.members)
+    && Array.isArray(value.chores)
+    && typeof value.completions === "object",
+  );
+}
+
 function migrateState(value) {
   const renameMap = {
     Avery: "Mom",
@@ -1019,17 +1314,48 @@ function migrateState(value) {
 
   const completions = JSON.parse(JSON.stringify(value.completions || {}));
   removeCompletionEntries(removedChoreIds, completions);
+  const validPrizeIds = new Set((value.prizes || []).map((prize) => prize.id));
+  const redemptions = Array.isArray(value.redemptions)
+    ? value.redemptions.map((redemption) => ({
+      id: redemption.id || cryptoId(),
+      memberId: redemption.memberId,
+      prizeId: validPrizeIds.has(redemption.prizeId) ? redemption.prizeId : null,
+      prizeTitle: cleanText(redemption.prizeTitle || "Prize"),
+      points: Number(redemption.points || 0),
+      redeemedAt: redemption.redeemedAt || new Date().toISOString(),
+    })).filter((redemption) => validMemberIds.has(redemption.memberId) && redemption.points > 0)
+    : [];
+  const adjustments = Array.isArray(value.adjustments)
+    ? value.adjustments.map((adjustment) => {
+      const rawPoints = Math.trunc(Number(adjustment.points || 0));
+      const points = Number.isFinite(rawPoints) ? clamp(rawPoints, -9999, 9999) : 0;
+      return {
+        id: adjustment.id || cryptoId(),
+        memberId: adjustment.memberId,
+        points,
+        label: cleanText(adjustment.label || (points >= 0 ? "Bonus point" : "Point deduction")),
+        createdAt: adjustment.createdAt || new Date().toISOString(),
+      };
+    }).filter((adjustment) => validMemberIds.has(adjustment.memberId) && adjustment.points !== 0)
+    : [];
 
-  return {
-    ...value,
-    view: value.view === "week" ? "prizes" : (["today", "rewards", "prizes"].includes(value.view) ? value.view : "today"),
-    members,
-    chores,
-    prizes: applyDefaultPrizes(Array.isArray(value.prizes) ? value.prizes.map((prize) => ({
+  const prizes = (Array.isArray(value.prizes) ? value.prizes : defaultPrizes())
+    .map((prize) => ({
       id: prize.id || cryptoId(),
       title: cleanText(prize.title),
       points: clamp(Number(prize.points || 1), 1, 9999),
-    })).filter((prize) => prize.title) : []),
+    }))
+    .filter((prize) => prize.title);
+
+  return {
+    ...value,
+    householdName: "Chores",
+    view: value.view === "week" ? "prizes" : (["today", "rewards", "prizes"].includes(value.view) ? value.view : "today"),
+    members,
+    chores,
+    prizes,
+    redemptions,
+    adjustments,
     completions,
   };
 }
@@ -1056,20 +1382,6 @@ function applyDefaultChores(chores, member) {
   });
 }
 
-function applyDefaultPrizes(prizes) {
-  defaultPrizeTemplates.forEach(([title, points]) => {
-    const existing = prizes.find((prize) => prize.title.toLowerCase() === title.toLowerCase());
-    if (existing) {
-      existing.title = title;
-      existing.points = points;
-    } else {
-      prizes.push(makePrize(title, points));
-    }
-  });
-
-  return prizes;
-}
-
 function validateImportedState(value) {
   if (!value || !Array.isArray(value.members) || !Array.isArray(value.chores) || typeof value.completions !== "object") {
     throw new Error("Invalid chore board");
@@ -1079,10 +1391,139 @@ function validateImportedState(value) {
 function saveAndRender() {
   saveState();
   render();
+  queueRemoteSave();
 }
 
 function saveState() {
   localStorage.setItem(STORE_KEY, JSON.stringify(state));
+}
+
+function hasSupabaseConfig() {
+  return Boolean(SUPABASE_CONFIG.url && SUPABASE_CONFIG.publishableKey && SUPABASE_CONFIG.boardId);
+}
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: SUPABASE_CONFIG.publishableKey,
+    Authorization: `Bearer ${SUPABASE_CONFIG.publishableKey}`,
+    ...extra,
+  };
+}
+
+function supabaseBoardUrl(select = "data,updated_at") {
+  const base = `${SUPABASE_CONFIG.url.replace(/\/$/, "")}/rest/v1/chore_boards`;
+  const params = new URLSearchParams({
+    id: `eq.${SUPABASE_CONFIG.boardId}`,
+    select,
+  });
+  return `${base}?${params.toString()}`;
+}
+
+function setSyncStatus(stateName, message, shouldRender = true) {
+  syncStatus = {
+    state: stateName,
+    message,
+  };
+  if (shouldRender) render();
+}
+
+function startSupabaseSync() {
+  if (!hasSupabaseConfig()) return;
+
+  loadRemoteBoard({ initial: true });
+  clearInterval(syncTimer);
+  syncTimer = setInterval(() => loadRemoteBoard({ silent: true }), SUPABASE_CONFIG.pollMs);
+  window.addEventListener("focus", () => loadRemoteBoard({ silent: true }));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) loadRemoteBoard({ silent: true });
+  });
+}
+
+async function loadRemoteBoard({ initial = false, silent = false } = {}) {
+  if (!hasSupabaseConfig() || remoteSaveInFlight) return;
+
+  if (!silent) setSyncStatus("syncing", "Syncing", true);
+
+  try {
+    const response = await fetch(supabaseBoardUrl(), {
+      headers: supabaseHeaders(),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Supabase read failed (${response.status})`);
+    }
+
+    const rows = await response.json();
+    const row = rows[0];
+    if (!row) {
+      throw new Error("Supabase board row not found");
+    }
+
+    remoteUpdatedAt = row.updated_at || remoteUpdatedAt;
+
+    if (!isUsableRemoteBoard(row.data)) {
+      await saveRemoteBoard();
+      return;
+    }
+
+    isApplyingRemote = true;
+    mergeBoardState(row.data);
+    saveState();
+    isApplyingRemote = false;
+    setSyncStatus("synced", "Synced", true);
+  } catch (error) {
+    isApplyingRemote = false;
+    setSyncStatus("offline", "Offline", true);
+  }
+}
+
+function queueRemoteSave() {
+  if (!hasSupabaseConfig() || isApplyingRemote) return;
+
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveRemoteBoard(), 350);
+}
+
+async function saveRemoteBoard() {
+  if (!hasSupabaseConfig()) return;
+
+  if (remoteSaveInFlight) {
+    remoteSaveQueued = true;
+    return;
+  }
+
+  remoteSaveInFlight = true;
+  setSyncStatus("syncing", "Saving", true);
+
+  try {
+    const response = await fetch(supabaseBoardUrl(), {
+      method: "PATCH",
+      headers: supabaseHeaders({
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      }),
+      body: JSON.stringify({
+        name: state.householdName,
+        data: serializeBoardState(state),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Supabase save failed (${response.status})`);
+    }
+
+    const rows = await response.json();
+    remoteUpdatedAt = rows[0]?.updated_at || remoteUpdatedAt;
+    setSyncStatus("synced", "Synced", true);
+  } catch (error) {
+    setSyncStatus("offline", "Offline", true);
+  } finally {
+    remoteSaveInFlight = false;
+    if (remoteSaveQueued) {
+      remoteSaveQueued = false;
+      saveRemoteBoard();
+    }
+  }
 }
 
 function exportState() {
@@ -1143,6 +1584,18 @@ function formatShortDate(date) {
 
 function formatTime(date) {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function formatRedemptionDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function formatSignedPoints(value) {
+  const points = Number(value || 0);
+  if (!Number.isFinite(points)) return "0";
+  return points > 0 ? `+${points}` : String(points);
 }
 
 function scheduleLabel(chore) {

@@ -106,6 +106,34 @@ button {
   gap: 12px;
 }
 
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 999px;
+  color: #31404a;
+  background: #eef3f4;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.sync-synced {
+  color: #0f5131;
+  background: rgba(71, 168, 120, 0.18);
+}
+
+.sync-syncing {
+  color: #5c4600;
+  background: rgba(242, 183, 5, 0.26);
+}
+
+.sync-offline {
+  color: #7a2c17;
+  background: rgba(217, 93, 57, 0.18);
+}
+
 .view-tabs {
   gap: 6px;
   padding: 6px;
@@ -544,11 +572,19 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 16px;
+  padding: 2px;
+}
+
+.points-dashboard {
+  display: grid;
+  gap: 16px;
   overflow: auto;
   padding: 2px 2px 14px;
 }
 
 .reward-card {
+  display: grid;
+  align-content: start;
   min-height: 220px;
   padding: 18px;
   border-radius: 8px;
@@ -571,6 +607,41 @@ button {
 .reward-card p {
   margin: 10px 0 0;
   font-weight: 800;
+}
+
+.reward-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.score-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: #172026;
+  background: rgba(255, 255, 255, 0.92);
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(23, 32, 38, 0.16);
+  cursor: pointer;
+}
+
+.score-action.is-positive {
+  color: #1f6d4a;
+}
+
+.score-action.is-negative {
+  color: #8a331d;
+}
+
+.score-action:hover,
+.score-action:focus-visible {
+  transform: translateY(-1px);
 }
 
 .prize-grid {
@@ -674,16 +745,57 @@ button {
   background: #eef3f4;
 }
 
-.unlock-row strong,
-.unlock-row span {
+.unlock-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.unlock-copy strong,
+.unlock-copy span {
   display: block;
 }
 
-.unlock-row span {
-  margin-top: 2px;
+.unlock-copy span {
   color: var(--muted);
   font-size: 0.88rem;
   font-weight: 800;
+}
+
+.prize-progress {
+  position: relative;
+  height: 8px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(96, 112, 123, 0.18);
+}
+
+.prize-progress span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--gold);
+}
+
+.unlock-row.is-unlocked .prize-progress span {
+  background: var(--mint);
+}
+
+.redeem-button {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  min-height: 42px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--mint);
+  cursor: pointer;
+}
+
+.redeem-button:hover,
+.redeem-button:focus-visible {
+  transform: translateY(-1px);
 }
 
 .avatar.small {
@@ -693,6 +805,83 @@ button {
 
 .prize-actions {
   justify-content: flex-end;
+}
+
+.redemption-panel {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 28px rgba(23, 32, 38, 0.08);
+}
+
+.redemption-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.redemption-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.redemption-header span {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.redemption-list {
+  display: grid;
+  gap: 10px;
+  max-height: 310px;
+  overflow: auto;
+}
+
+.redemption-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f4f7f7;
+}
+
+.redemption-row strong,
+.redemption-row span {
+  display: block;
+}
+
+.redemption-row span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.redemption-points {
+  min-width: 58px;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #7a2c17;
+  background: rgba(217, 93, 57, 0.14);
+  font-weight: 900;
+}
+
+.adjustment-points.is-positive {
+  color: #1f6d4a;
+  background: rgba(71, 168, 120, 0.16);
+}
+
+.adjustment-points.is-negative {
+  color: #7a2c17;
+  background: rgba(217, 93, 57, 0.14);
 }
 
 .modal-backdrop {
@@ -855,6 +1044,11 @@ select:focus-visible {
 
   .clock {
     display: none;
+  }
+
+  .sync-pill {
+    min-height: 32px;
+    font-size: 0.76rem;
   }
 
   .top-actions {
